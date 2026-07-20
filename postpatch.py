@@ -27,8 +27,8 @@ def patch(path):
             data = data.replace(s, s[::-1])
             done[s.decode()] = c
     # 2) frida -> frlda(确定性,主机 client 用同一规则,协议才对得上)
-    fc = data.count(b"frida") + data.count(b"Frida")
-    data = data.replace(b"frida", b"frlda").replace(b"Frida", b"Frlda")
+    fc = data.count(b"frida") + data.count(b"Frida") + data.count(b"FRIDA")
+    data = data.replace(b"frida", b"frlda").replace(b"Frida", b"Frlda").replace(b"FRIDA", b"FRLDA")
     # 保护 Python 扩展入口(server/agent 无此符号,无害;client 复用本逻辑时关键)
     data = data.replace(b"PyInit__frlda", b"PyInit__frida")
 
@@ -42,7 +42,7 @@ def patch(path):
     print(f"[postpatch] {path}")
     print(f"  反转检测串: {done}")
     print(f"  frida/Frida 改名: {fc} 处")
-    print(f"  残留 frida={data.count(b'frida')} Frida={data.count(b'Frida')} (server/agent 应为0)")
+    print(f"  残留 frida={data.count(b'frida')} Frida={data.count(b'Frida')} FRIDA={data.count(b'FRIDA')} (server/agent 应为0)")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

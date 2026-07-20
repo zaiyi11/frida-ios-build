@@ -11,8 +11,8 @@ def patch(path):
         print(f"备份 -> {bak}")
     data = open(path, "rb").read()
     n0 = len(data)
-    fc = data.count(b"frida") + data.count(b"Frida")
-    data = data.replace(b"frida", b"frlda").replace(b"Frida", b"Frlda")
+    fc = data.count(b"frida") + data.count(b"Frida") + data.count(b"FRIDA")
+    data = data.replace(b"frida", b"frlda").replace(b"Frida", b"Frlda").replace(b"FRIDA", b"FRLDA")
     # 关键:保留 Python 扩展入口 PyInit__frida,否则 import 失败
     data = data.replace(b"PyInit__frlda", b"PyInit__frida")
     assert len(data) == n0
