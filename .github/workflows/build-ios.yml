@@ -41,6 +41,8 @@ jobs:
           grep -n 'Wno-error' releng/setup-env.sh || (echo "注入失败"; exit 1)
 
       - name: 编译 frida-server (iOS arm64)
+        env:
+          IOS_CERTID: "-"        # ad-hoc 签名(runner 无 Apple 证书;越狱机可用)
         run: |
           cd frida
           # frida 16.1.4 用 Makefile target,core-ios = iOS arm64(对 6s/A9)
