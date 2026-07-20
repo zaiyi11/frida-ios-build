@@ -27,20 +27,6 @@ jobs:
             -b "${{ github.event.inputs.frida_version }}" \
             https://github.com/frida/frida.git frida
 
-      - name: 反检测改名(源码级 + 确定性校验)
-        run: |
-          cd frida
-          echo "== 改名前:gum-js-loop 命中文件 =="
-          grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gum-js-loop' . | tee /tmp/hits.txt
-          N=$(grep -c . /tmp/hits.txt || echo 0); echo ">>> 命中文件数: $N"
-          if [ "$N" -eq 0 ]; then echo "!!! 一个都没命中,改名不会生效"; fi
-          # 用 perl 改(不依赖 BSD sed 语法)
-          while IFS= read -r f; do [ -n "$f" ] && perl -i -pe 's/gum-js-loop/gmain-loop/g' "$f"; done < /tmp/hits.txt
-          echo "== 改名后校验 =="
-          echo ">>> 残留 gum-js-loop 文件数: $(grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gum-js-loop' . | grep -c . || echo 0)"
-          echo ">>> 新增 gmain-loop 文件数:  $(grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gmain-loop' . | grep -c . || echo 0)"
-          # 端口 27042 走运行时 -l 规避;文件路径靠安装位置规避
-
       - name: 降级 clang16 默认错误(frida16.1.4 是 2023 代码,clang16 把这些当 error)
         run: |
           cd frida
@@ -57,19 +43,34 @@ jobs:
           make core-ios
           echo "== 定位产物 =="
           find build -name frida-server -type f -print
+          find build -name 'frida-agent.dylib' -type f -print
 
-      - name: ldid 签越狱调试权限
+      - name: 去特征(undetected-frida 式:编译后二进制 patch,版本无关无 hunk 风险)
+        run: |
+          SRV=$(find frida/build -name frida-server -type f | head -1)
+          AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
+          echo "server=$SRV"; echo "agent=$AG"
+          [ -n "$SRV" ] && [ -n "$AG" ] || { echo "产物缺失"; exit 1; }
+          # 反转 gum-js-loop/gmain/gdbus/GumScript/GDBusProxy/GLib-GIO/FridaScriptEngine + frida->frlda
+          python3 "${{ github.workspace }}/postpatch.py" "$SRV" "$AG"
+          echo "== agent 特征残留校验(应全 0)=="
+          for s in gum-js-loop gmain gdbus GumScript GDBusProxy 'GLib-GIO' FridaScriptEngine frida Frida; do
+            printf "  %-18s %s\n" "$s" "$(strings -a "$AG" | grep -c "$s")"
+          done
+
+      - name: ldid 签越狱调试权限(签去特征后的二进制)
         run: |
           brew install ldid || true
-          BIN=$(find frida/build -name frida-server -type f | head -1)
-          echo "server=$BIN"
-          ldid -S"${{ github.workspace }}/ent.plist" "$BIN"
-          cp "$BIN" "frida-server-ios-${{ github.event.inputs.arch }}"
-          ls -l "frida-server-ios-${{ github.event.inputs.arch }}"
-          # 把独立 agent dylib(未压缩)也拷出来,用于验证改名
+          SRV=$(find frida/build -name frida-server -type f | head -1)
           AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
-          echo "agent=$AG"
-          [ -n "$AG" ] && cp "$AG" "frida-agent-ios.dylib" && echo "== agent 里 gum-js-loop=$(strings -a frida-agent-ios.dylib | grep -c gum-js-loop) gmain-loop=$(strings -a frida-agent-ios.dylib | grep -c gmain-loop)"
+          # server 带越狱调试 entitlements;agent ad-hoc 即可
+          ldid -S"${{ github.workspace }}/ent.plist" "$SRV"
+          ldid -S "$AG"
+          cp "$SRV" "frida-server-ios-${{ github.event.inputs.arch }}"
+          cp "$AG" "frida-agent-ios.dylib"
+          ls -l "frida-server-ios-${{ github.event.inputs.arch }}" "frida-agent-ios.dylib"
+          # 注意:去特征后 server 内部 agent 路径已变为 /usr/lib/frlda/frlda-agent.dylib
+          #       部署时把 frida-agent-ios.dylib 放到该路径(或用部署脚本改路径)
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
