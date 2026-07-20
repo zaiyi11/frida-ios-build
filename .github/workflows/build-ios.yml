@@ -18,6 +18,9 @@ jobs:
     runs-on: macos-14            # 秒被领取(macos-13 免费机稀缺常排队 15min+)
     timeout-minutes: 120
     steps:
+      - name: Checkout 本仓库(取 ent.plist)
+        uses: actions/checkout@v4
+
       - name: 拉取 frida 源码(含子模块)
         run: |
           git clone --recurse-submodules --depth 1 \
