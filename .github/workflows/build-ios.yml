@@ -15,12 +15,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13            # macos-13 才有 Xcode 14(clang 14)
+    runs-on: macos-14            # 秒被领取(macos-13 免费机稀缺常排队 15min+)
     timeout-minutes: 120
     steps:
-      - name: 选 Xcode 14.3.1(clang 14,避免 clang16 把类型不匹配当错误)
-        run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
-
       - name: 拉取 frida 源码(含子模块)
         run: |
           git clone --recurse-submodules --depth 1 \
@@ -35,6 +32,13 @@ jobs:
             | xargs -0 -r sed -i '' 's/gum-js-loop/gmain-loop/g' || true
           echo "改名完成;端口 27042 走运行时 -l 规避,文件路径 /usr/sbin/frida-server 靠安装位置规避"
           # 可选(首次先不开,避免破坏协议):re.frida.server / frida:rpc / frida-agent 改名
+
+      - name: 降级 clang16 默认错误(frida16.1.4 是 2023 代码,clang16 把这些当 error)
+        run: |
+          cd frida
+          # setup-env.sh 无 CFLAGS 钩子,直接往 c_like_flags 注入 -Wno-error=*
+          perl -0777 -i -pe 's/(c_like_flags=\(\))/$1\nc_like_flags+=("-Wno-error=incompatible-function-pointer-types" "-Wno-error=incompatible-pointer-types" "-Wno-error=int-conversion" "-Wno-error=implicit-function-declaration" "-Wno-error=implicit-int")/' releng/setup-env.sh
+          grep -n 'Wno-error' releng/setup-env.sh || (echo "注入失败"; exit 1)
 
       - name: 编译 frida-server (iOS arm64)
         run: |
