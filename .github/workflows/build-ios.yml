@@ -15,9 +15,12 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14            # 关键:macOS runner 自带 Apple 工具链
+    runs-on: macos-13            # macos-13 才有 Xcode 14(clang 14)
     timeout-minutes: 120
     steps:
+      - name: 选 Xcode 14.3.1(clang 14,避免 clang16 把类型不匹配当错误)
+        run: sudo xcode-select -s /Applications/Xcode_14.3.1.app
+
       - name: 拉取 frida 源码(含子模块)
         run: |
           git clone --recurse-submodules --depth 1 \
