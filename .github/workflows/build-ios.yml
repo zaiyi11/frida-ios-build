@@ -27,14 +27,19 @@ jobs:
             -b "${{ github.event.inputs.frida_version }}" \
             https://github.com/frida/frida.git frida
 
-      - name: 反检测改名(源码级,version-robust)
+      - name: 反检测改名(源码级 + 确定性校验)
         run: |
           cd frida
-          # 干掉 isGumjsThreadExist:重命名 gum-js-loop 线程(frida 自设自用,改名安全)
-          grep -rlZ --include=*.c --include=*.cpp --include=*.vala 'gum-js-loop' . \
-            | xargs -0 -r sed -i '' 's/gum-js-loop/gmain-loop/g' || true
-          echo "改名完成;端口 27042 走运行时 -l 规避,文件路径 /usr/sbin/frida-server 靠安装位置规避"
-          # 可选(首次先不开,避免破坏协议):re.frida.server / frida:rpc / frida-agent 改名
+          echo "== 改名前:gum-js-loop 命中文件 =="
+          grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gum-js-loop' . | tee /tmp/hits.txt
+          N=$(grep -c . /tmp/hits.txt || echo 0); echo ">>> 命中文件数: $N"
+          if [ "$N" -eq 0 ]; then echo "!!! 一个都没命中,改名不会生效"; fi
+          # 用 perl 改(不依赖 BSD sed 语法)
+          while IFS= read -r f; do [ -n "$f" ] && perl -i -pe 's/gum-js-loop/gmain-loop/g' "$f"; done < /tmp/hits.txt
+          echo "== 改名后校验 =="
+          echo ">>> 残留 gum-js-loop 文件数: $(grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gum-js-loop' . | grep -c . || echo 0)"
+          echo ">>> 新增 gmain-loop 文件数:  $(grep -rl --include=*.c --include=*.cpp --include=*.vala --include=*.h 'gmain-loop' . | grep -c . || echo 0)"
+          # 端口 27042 走运行时 -l 规避;文件路径靠安装位置规避
 
       - name: 降级 clang16 默认错误(frida16.1.4 是 2023 代码,clang16 把这些当 error)
         run: |
@@ -61,9 +66,15 @@ jobs:
           ldid -S"${{ github.workspace }}/ent.plist" "$BIN"
           cp "$BIN" "frida-server-ios-${{ github.event.inputs.arch }}"
           ls -l "frida-server-ios-${{ github.event.inputs.arch }}"
+          # 把独立 agent dylib(未压缩)也拷出来,用于验证改名
+          AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
+          echo "agent=$AG"
+          [ -n "$AG" ] && cp "$AG" "frida-agent-ios.dylib" && echo "== agent 里 gum-js-loop=$(strings -a frida-agent-ios.dylib | grep -c gum-js-loop) gmain-loop=$(strings -a frida-agent-ios.dylib | grep -c gmain-loop)"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: frida-server-ios-${{ github.event.inputs.arch }}
-          path: frida-server-ios-${{ github.event.inputs.arch }}
+          path: |
+            frida-server-ios-${{ github.event.inputs.arch }}
+            frida-agent-ios.dylib
