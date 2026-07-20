@@ -33,11 +33,11 @@ jobs:
           echo "改名完成;端口 27042 走运行时 -l 规避,文件路径 /usr/sbin/frida-server 靠安装位置规避"
           # 可选(首次先不开,避免破坏协议):re.frida.server / frida:rpc / frida-agent 改名
 
-      - name: 编译 frida-server (iOS)
+      - name: 编译 frida-server (iOS arm64)
         run: |
           cd frida
-          ./configure --host=ios-${{ github.event.inputs.arch }} --enable-server --enable-gadget
-          make
+          # frida 16.1.4 用 Makefile target,core-ios = iOS arm64(对 6s/A9)
+          make core-ios
           echo "== 定位产物 =="
           find build -name frida-server -type f -print
 
