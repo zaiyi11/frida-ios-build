@@ -34,6 +34,17 @@ jobs:
           perl -0777 -i -pe 's/(c_like_flags=\(\))/$1\nc_like_flags+=("-Wno-error=incompatible-function-pointer-types" "-Wno-error=incompatible-pointer-types" "-Wno-error=int-conversion" "-Wno-error=implicit-function-declaration" "-Wno-error=implicit-int")/' releng/setup-env.sh
           grep -n 'Wno-error' releng/setup-env.sh || (echo "注入失败"; exit 1)
 
+      - name: 反检测源码补丁(frida-gum 入口 redirect 去 br/ldr prologue 特征)
+        run: |
+          # 治工行/邮储对 frida-core 自身 hook 的 libsystem 函数(task_threads/
+          # thread_resume/abort/signal…)做的 prologue 完整性扫描:
+          #  16B redirect: ldr x16;br x16(首字节0x58) -> movz/movk x16;br x16(首字节0xd2)
+          #  8B  redirect: adrp x16;br x16 -> adrp x16;ret x16(byte6 0x1f->0x5f)
+          python3 "${{ github.workspace }}/patch_antidetect.py" frida
+          echo "== 确认补丁已应用 =="
+          ITC=$(find frida -path '*/gum/backend-arm64/guminterceptor-arm64.c' | head -1)
+          grep -q '0xd2800010' "$ITC" || (echo "补丁未生效: $ITC"; exit 1)
+
       - name: 编译 frida-server (iOS arm64)
         env:
           IOS_CERTID: "-"        # ad-hoc 签名(runner 无 Apple 证书;越狱机可用)
