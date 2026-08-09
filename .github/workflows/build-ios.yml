@@ -79,11 +79,37 @@ jobs:
           brew install ldid || true
           SRV=$(find frida/build -name frida-server -type f | head -1)
           AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
-          # server 带越狱调试 entitlements;agent ad-hoc 即可
-          ldid -S"${{ github.workspace }}/ent.plist" "$SRV"
-          ldid -S "$AG"
           cp "$SRV" "frlda-server-ios-${{ github.event.inputs.arch }}"
           cp "$AG" "frlda-agent.dylib"
+          # 先复制成 frlda-* 名字再签名,避免 ldid 把 frida-server/frida-agent.dylib
+          # 作为 code signature identifier 写回 artifact。
+          ldid -S"${{ github.workspace }}/ent.plist" "frlda-server-ios-${{ github.event.inputs.arch }}"
+          ldid -S "frlda-agent.dylib"
+          # 签名后再跑一次 postpatch + 硬校验,兜住签名工具新写入的标识符。
+          python3 "${{ github.workspace }}/postpatch.py" "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"
+          echo "== final artifact 特征残留校验(应全 0)=="
+          for bin in "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"; do
+            echo "-- $bin"
+            python3 - "$bin" <<'PY'
+import sys
+from pathlib import Path
+data = Path(sys.argv[1]).read_bytes()
+needles = [
+    b"gum-js-loop", b"gmain", b"gdbus", b"GumScript", b"GDBusProxy",
+    b"GLib-GIO", b"FridaScriptEngine", b"frida-agent.dylib",
+    b"frida-server", b"re.frida.Server", b"frida:rpc",
+    b"frida", b"Frida", b"FRIDA",
+]
+bad = False
+for s in needles:
+    c = data.count(s)
+    print(f"  {s.decode(errors='replace'):<22} {c}")
+    if c:
+        bad = True
+if bad:
+    raise SystemExit(1)
+PY
+          done
           ls -l "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"
           # 注意:去特征后 server 内部 agent 路径已变为 /usr/lib/frlda/frlda-agent.dylib
           #       部署时把 frlda-agent.dylib 放到该路径,并把 server 进程名保持为 frlda-server。
