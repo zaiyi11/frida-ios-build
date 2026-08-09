@@ -90,25 +90,7 @@ jobs:
           echo "== final artifact 特征残留校验(应全 0)=="
           for bin in "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"; do
             echo "-- $bin"
-            python3 - "$bin" <<'PY'
-import sys
-from pathlib import Path
-data = Path(sys.argv[1]).read_bytes()
-needles = [
-    b"gum-js-loop", b"gmain", b"gdbus", b"GumScript", b"GDBusProxy",
-    b"GLib-GIO", b"FridaScriptEngine", b"frida-agent.dylib",
-    b"frida-server", b"re.frida.Server", b"frida:rpc",
-    b"frida", b"Frida", b"FRIDA",
-]
-bad = False
-for s in needles:
-    c = data.count(s)
-    print(f"  {s.decode(errors='replace'):<22} {c}")
-    if c:
-        bad = True
-if bad:
-    raise SystemExit(1)
-PY
+            python3 -c 'import sys; from pathlib import Path; data=Path(sys.argv[1]).read_bytes(); needles=[b"gum-js-loop",b"gmain",b"gdbus",b"GumScript",b"GDBusProxy",b"GLib-GIO",b"FridaScriptEngine",b"frida-agent.dylib",b"frida-server",b"re.frida.Server",b"frida:rpc",b"frida",b"Frida",b"FRIDA"]; counts=[(s,data.count(s)) for s in needles]; [print("  %-22s %s" % (s.decode("utf-8","replace"), c)) for s,c in counts]; raise SystemExit(1 if any(c for _,c in counts) else 0)' "$bin"
           done
           ls -l "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"
           # 注意:去特征后 server 内部 agent 路径已变为 /usr/lib/frlda/frlda-agent.dylib
