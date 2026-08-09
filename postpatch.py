@@ -16,6 +16,25 @@ REVERSE = [
     b"gdbus",
 ]
 
+# 这些都是 RASP 常扫的直接落地/进程/服务名特征。它们会被下面的
+# frida->frlda 全局等长替换覆盖;这里单独列出来做硬校验,防止旧产物
+# 或未来版本改动导致 artifact 里仍残留明显字符串。
+MUST_CLEAR = [
+    b"frida-agent.dylib",
+    b"frida-server",
+    b"re.frida.Server",
+    b"re.frida.Agent",
+    b"frida:rpc",
+    b"frida:portal",
+    b"frida:host-session",
+    b"frida:agent-session",
+    b"frida:transport-broker",
+    b"frida:bus",
+    b"frida",
+    b"Frida",
+    b"FRIDA",
+]
+
 def patch(path):
     data = open(path, "rb").read()
     n0 = len(data)
@@ -39,10 +58,13 @@ def patch(path):
     for s in REVERSE:
         r = data.count(s)
         assert r == 0, f"残留检测串 {s.decode()} x{r}"
+    for s in MUST_CLEAR:
+        r = data.count(s)
+        assert r == 0, f"残留 Frida 特征 {s.decode(errors='replace')} x{r}"
     print(f"[postpatch] {path}")
     print(f"  反转检测串: {done}")
     print(f"  frida/Frida 改名: {fc} 处")
-    print(f"  残留 frida={data.count(b'frida')} Frida={data.count(b'Frida')} FRIDA={data.count(b'FRIDA')} (server/agent 应为0)")
+    print("  明显 Frida 特征残留: 0")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

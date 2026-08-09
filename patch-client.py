@@ -16,6 +16,9 @@ def patch(path):
     # 关键:保留 Python 扩展入口 PyInit__frida,否则 import 失败
     data = data.replace(b"PyInit__frlda", b"PyInit__frida")
     assert len(data) == n0
+    assert data.count(b"frida") == data.count(b"PyInit__frida"), "除 PyInit__frida 外仍残留 frida"
+    assert data.count(b"Frida") == 0, "残留 Frida"
+    assert data.count(b"FRIDA") == 0, "残留 FRIDA"
     open(path, "wb").write(data)
     print(f"[client] {path}: frida/Frida 改名 {fc} 处,PyInit 已保留")
 
