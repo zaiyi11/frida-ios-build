@@ -2,6 +2,7 @@ name: build-frida-ios
 
 # 在 GitHub 的 macOS runner(自带 Xcode + iOS SDK)上原生编 iOS 版 frida。
 # 手动触发:Actions 页 -> build-frida-ios -> Run workflow。
+# 每次构建生成随机别名(postpatch.py),产物命名/内部字符串都带该别名。
 
 on:
   workflow_dispatch:
@@ -18,7 +19,7 @@ jobs:
     runs-on: macos-14            # 秒被领取(macos-13 免费机稀缺常排队 15min+)
     timeout-minutes: 120
     steps:
-      - name: Checkout 本仓库(取 ent.plist)
+      - name: Checkout 本仓库(取 ent.plist 与脚本)
         uses: actions/checkout@v4
 
       - name: 拉取 frida 源码(含子模块)
@@ -36,8 +37,8 @@ jobs:
 
       - name: 反检测源码补丁(frida-gum 入口 redirect 去 br/ldr prologue 特征)
         run: |
-          # 治工行/邮储对 frida-core 自身 hook 的 libsystem 函数(task_threads/
-          # thread_resume/abort/signal…)做的 prologue 完整性扫描:
+          # 治工行/邮储/GCash 等对 frida-core 自身 hook 的 libsystem 函数
+          # (task_threads/thread_resume/abort/signal...)做的 prologue 完整性扫描:
           #  16B redirect: ldr x16;br x16(首字节0x58) -> movz/movk x16;br x16(首字节0xd2)
           #  8B  redirect: adrp x16;br x16 -> adrp x16;ret x16(byte6 0x1f->0x5f)
           python3 "${{ github.workspace }}/patch_antidetect.py" frida
@@ -56,14 +57,20 @@ jobs:
           find build -name frida-server -type f -print
           find build -name 'frida-agent.dylib' -type f -print
 
-      - name: 去特征(undetected-frida 式:编译后二进制 patch,版本无关无 hunk 风险)
+      - name: 去特征(随机别名 postpatch + 端口 + LC_ID_DYLIB)
         run: |
           SRV=$(find frida/build -name frida-server -type f | head -1)
           AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
           echo "server=$SRV"; echo "agent=$AG"
           [ -n "$SRV" ] && [ -n "$AG" ] || { echo "产物缺失"; exit 1; }
-          # 反转 gum-js-loop/gmain/gdbus/GumScript/GDBusProxy/GLib-GIO/FridaScriptEngine + frida->frlda
+
+          # 随机别名由 postpatch.py 生成(5 字母数字,等长替换保证 LC_ID_DYLIB 兼容)
+          # 用环境变量固定本次构建的别名,供后续步骤读取 manifest
           python3 "${{ github.workspace }}/postpatch.py" "$SRV" "$AG"
+          # postpatch 会生成 build_manifest.json,读别名
+          ALIAS=$(python3 -c 'import json; print(json.load(open("build_manifest.json"))["alias"])')
+          echo "ALIAS=$ALIAS" >> $GITHUB_ENV
+          echo "随机别名: $ALIAS"
           echo "== server/agent 特征残留校验(应全 0)=="
           for bin in "$SRV" "$AG"; do
             echo "-- $bin"
@@ -79,27 +86,29 @@ jobs:
           brew install ldid || true
           SRV=$(find frida/build -name frida-server -type f | head -1)
           AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
-          cp "$SRV" "frlda-server-ios-${{ github.event.inputs.arch }}"
-          cp "$AG" "frlda-agent.dylib"
-          # 先复制成 frlda-* 名字再签名,避免 ldid 把 frida-server/frida-agent.dylib
-          # 作为 code signature identifier 写回 artifact。
-          ldid -S"${{ github.workspace }}/ent.plist" "frlda-server-ios-${{ github.event.inputs.arch }}"
-          ldid -S "frlda-agent.dylib"
+          ALIAS="${{ env.ALIAS }}"
+          # 用随机别名命名 artifact,避免固定 frlda 被 RASP 长期学习
+          cp "$SRV" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}"
+          cp "$AG" "${ALIAS}-agent.dylib"
+          # 先复制成 alias-* 名字再签名,避免 ldid 把原名作为 identifier 写回。
+          ldid -S"${{ github.workspace }}/ent.plist" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}"
+          ldid -S "${ALIAS}-agent.dylib"
           # 签名后再跑一次 postpatch + 硬校验,兜住签名工具新写入的标识符。
-          python3 "${{ github.workspace }}/postpatch.py" "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"
+          python3 "${{ github.workspace }}/postpatch.py" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}" "${ALIAS}-agent.dylib"
           echo "== final artifact 特征残留校验(应全 0)=="
-          for bin in "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"; do
+          for bin in "${ALIAS}-server-ios-${{ github.event.inputs.arch }}" "${ALIAS}-agent.dylib"; do
             echo "-- $bin"
             python3 -c 'import sys; from pathlib import Path; data=Path(sys.argv[1]).read_bytes(); needles=[b"gum-js-loop",b"gmain",b"gdbus",b"GumScript",b"GDBusProxy",b"GLib-GIO",b"FridaScriptEngine",b"frida-agent.dylib",b"frida-server",b"re.frida.Server",b"frida:rpc",b"frida",b"Frida",b"FRIDA"]; counts=[(s,data.count(s)) for s in needles]; [print("  %-22s %s" % (s.decode("utf-8","replace"), c)) for s,c in counts]; raise SystemExit(1 if any(c for _,c in counts) else 0)' "$bin"
           done
-          ls -l "frlda-server-ios-${{ github.event.inputs.arch }}" "frlda-agent.dylib"
-          # 注意:去特征后 server 内部 agent 路径已变为 /usr/lib/frlda/frlda-agent.dylib
-          #       部署时把 frlda-agent.dylib 放到该路径,并把 server 进程名保持为 frlda-server。
+          ls -l "${ALIAS}-server-ios-${{ github.event.inputs.arch }}" "${ALIAS}-agent.dylib"
+          # 部署注意:server 内部 agent 路径已变为 /usr/lib/<alias>/<alias>-agent.dylib,
+          # 把 agent 放到该路径,进程名保持 <alias>-server。
 
-      - name: 上传产物
+      - name: 上传产物(含 manifest)
         uses: actions/upload-artifact@v4
         with:
-          name: frlda-server-ios-${{ github.event.inputs.arch }}
+          name: frida-stealth-${{ github.event.inputs.arch }}
           path: |
-            frlda-server-ios-${{ github.event.inputs.arch }}
-            frlda-agent.dylib
+            *-server-ios-${{ github.event.inputs.arch }}
+            *-agent.dylib
+            build_manifest.json

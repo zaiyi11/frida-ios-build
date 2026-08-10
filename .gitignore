@@ -2,3 +2,4 @@ build/
 frida/
 *.deb
 frida-server-ios-*
+*.pyc
