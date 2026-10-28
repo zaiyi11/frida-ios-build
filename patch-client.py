@@ -83,6 +83,25 @@ def patch(path, alias):
     open(path, "wb").write(data)
     print(f"[client] {path}: 协议串已按 alias={alias} 替换,PyInit__frida 已保留")
 
+    # Python implements Script RPC framing outside the native extension.
+    # Updating only _frida leaves exports_sync waiting on the original marker.
+    from pathlib import Path
+    native_dir = Path(path).resolve().parent
+    core_path = native_dir / "core.py" if native_dir.name == "frida" else native_dir / "frida" / "core.py"
+    if not core_path.is_file():
+        raise RuntimeError(f"Cannot find Python RPC implementation: {core_path}")
+    source = core_path.read_text()
+    marker = f"{alias}:rpc"
+    if "frida:rpc" in source:
+        core_backup = core_path.with_name(core_path.name + ".frida-original.bak")
+        if not core_backup.exists():
+            shutil.copy2(core_path, core_backup)
+        source = source.replace("frida:rpc", marker)
+        core_path.write_text(source)
+    if source.count(marker) != 2:
+        raise RuntimeError("Python RPC markers do not match this build; restore the original core.py before patching")
+    print(f"[client] {core_path}: Python RPC send/receive markers matched to {marker}")
+
 if __name__ == "__main__":
     alias, args = load_alias_from_args(sys.argv[1:])
     if not alias:
