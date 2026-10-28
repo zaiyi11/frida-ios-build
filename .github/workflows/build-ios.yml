@@ -12,7 +12,7 @@ on:
         default: "16.1.4"
       arch:
         description: "iOS 架构(6s/A9=arm64;A12+=arm64e)"
-        default: "arm64"
+        default: "arm64e"
 
 jobs:
   build:
@@ -46,21 +46,28 @@ jobs:
           ITC=$(find frida -path '*/gum/backend-arm64/guminterceptor-arm64.c' | head -1)
           grep -q '0xd2800010' "$ITC" || (echo "补丁未生效: $ITC"; exit 1)
 
-      - name: 编译 frida-server (iOS arm64)
+      - name: 编译 frida-server 和双架构 agent
         env:
           IOS_CERTID: "-"        # ad-hoc 签名(runner 无 Apple 证书;越狱机可用)
         run: |
           cd frida
-          # frida 16.1.4 用 Makefile target,core-ios = iOS arm64(对 6s/A9)
-          make core-ios
+          ARCH="${{ github.event.inputs.arch }}"
+          case "$ARCH" in arm64|arm64e) ;; *) echo "Unsupported architecture"; exit 1;; esac
+          make build/frida-ios-arm64/usr/lib/pkgconfig/frida-core-1.0.pc
+          make build/frida-ios-arm64e/usr/lib/pkgconfig/frida-core-1.0.pc
+          mkdir -p ../dist
+          cp "build/frida-ios-${ARCH}/usr/bin/frida-server" ../dist/server
+          lipo -create build/frida-ios-arm64/usr/lib/frida/frida-agent.dylib \
+            build/frida-ios-arm64e/usr/lib/frida/frida-agent.dylib -output ../dist/agent.dylib
+          lipo -info ../dist/server ../dist/agent.dylib
           echo "== 定位产物 =="
           find build -name frida-server -type f -print
           find build -name 'frida-agent.dylib' -type f -print
 
       - name: 去特征(随机别名 postpatch + 端口 + LC_ID_DYLIB)
         run: |
-          SRV=$(find frida/build -name frida-server -type f | head -1)
-          AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
+          SRV=dist/server
+          AG=dist/agent.dylib
           echo "server=$SRV"; echo "agent=$AG"
           [ -n "$SRV" ] && [ -n "$AG" ] || { echo "产物缺失"; exit 1; }
 
@@ -84,8 +91,8 @@ jobs:
       - name: ldid 签越狱调试权限(签去特征后的二进制)
         run: |
           brew install ldid || true
-          SRV=$(find frida/build -name frida-server -type f | head -1)
-          AG=$(find frida/build -name 'frida-agent.dylib' -type f | head -1)
+          SRV=dist/server
+          AG=dist/agent.dylib
           ALIAS="${{ env.ALIAS }}"
           # 用随机别名命名 artifact,避免固定 frlda 被 RASP 长期学习
           cp "$SRV" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}"
@@ -93,8 +100,8 @@ jobs:
           # 先复制成 alias-* 名字再签名,避免 ldid 把原名作为 identifier 写回。
           ldid -S"${{ github.workspace }}/ent.plist" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}"
           ldid -S "${ALIAS}-agent.dylib"
-          # 签名后再跑一次 postpatch + 硬校验,兜住签名工具新写入的标识符。
-          python3 "${{ github.workspace }}/postpatch.py" "${ALIAS}-server-ios-${{ github.event.inputs.arch }}" "${ALIAS}-agent.dylib"
+          # Signing is the final mutation. Keep the first manifest and its alias.
+          test "$(python3 -c 'import json; print(json.load(open("build_manifest.json"))["alias"])')" = "$ALIAS"
           echo "== final artifact 特征残留校验(应全 0)=="
           for bin in "${ALIAS}-server-ios-${{ github.event.inputs.arch }}" "${ALIAS}-agent.dylib"; do
             echo "-- $bin"
