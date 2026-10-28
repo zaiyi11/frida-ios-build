@@ -21,10 +21,10 @@ import os, sys, random, string, struct, json
 #   /usr/lib/<5char>/<5char>-agent.dylib 恰好 32 字节,等长替换才成立。
 _ALIAS = os.environ.get("FRIDA_ALIAS") or None
 if _ALIAS:
-    assert len(_ALIAS) == 5 and _ALIAS.isalnum(), \
+    assert len(_ALIAS) == 5 and _ALIAS.isascii() and _ALIAS.isalnum() and _ALIAS[0].isalpha(), \
         f"FRIDA_ALIAS 必须是 5 字母数字: {_ALIAS}"
 else:
-    _ALIAS = ''.join(random.choices(string.ascii_lowercase + string.digits, k=5))
+    _ALIAS = random.choice(string.ascii_lowercase) + ''.join(random.choices(string.ascii_lowercase + string.digits, k=4))
 
 # 大小写变体
 _ALIAS_UPPER = _ALIAS.upper()          # FRIDA → 全大写
@@ -79,7 +79,8 @@ for tn in ["gum-js-loop", "gmain", "gdbus", "gum-deadbeef", "gum-event"]:
 class_names = {}
 for cn in ["FridaScriptEngine", "GumScript", "GumObject", "GDBusProxy", "GDBusConnection",
            "GLib-GIO", "GumEventSink", "GumInterceptorBackend"]:
-    r = _rand_threadname(len(cn))
+    # GType identifiers must start with a letter or underscore.
+    r = random.choice(string.ascii_lowercase) + _rand_threadname(len(cn) - 1)
     class_names[cn] = r
     _add(cn, r)
 
