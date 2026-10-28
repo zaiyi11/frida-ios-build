@@ -54,6 +54,9 @@ jobs:
           ARCH="${{ github.event.inputs.arch }}"
           case "$ARCH" in arm64|arm64e) ;; *) echo "Unsupported architecture"; exit 1;; esac
           make build/frida-ios-arm64/usr/lib/pkgconfig/frida-core-1.0.pc
+          # The custom 48-bit trampoline rewrite drops PAC bits on arm64e.
+          # Keep the upstream authenticated trampoline for this architecture.
+          git -C frida-gum checkout -- gum/backend-arm64/guminterceptor-arm64.c
           make build/frida-ios-arm64e/usr/lib/pkgconfig/frida-core-1.0.pc
           mkdir -p ../dist
           cp "build/frida-ios-${ARCH}/usr/bin/frida-server" ../dist/server
@@ -90,7 +93,7 @@ jobs:
 
       - name: ldid 签越狱调试权限(签去特征后的二进制)
         run: |
-          brew install ldid || true
+          brew install ldid
           SRV=dist/server
           AG=dist/agent.dylib
           ALIAS="${{ env.ALIAS }}"
