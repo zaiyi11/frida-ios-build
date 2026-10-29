@@ -1,0 +1,85 @@
+name: build-ios-enhanced-backup
+
+on:
+  workflow_dispatch:
+    inputs:
+      frida_version:
+        description: Frida version (source patch is validated against 16.1.4)
+        type: choice
+        options: ['16.1.4']
+        default: '16.1.4'
+      arch:
+        description: Server architecture; agent always includes both slices
+        type: choice
+        options: [arm64e, arm64]
+        default: arm64e
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regression checks
+        run: |
+          python3 -m unittest discover -s backup -p 'test_*.py' -v
+          node backup/test_guard.js
+          node --check backup/guard.js
+          python3 -m py_compile backup/*.py
+      - name: Fetch upstream and record provenance
+        env:
+          VERSION: ${{ inputs.frida_version }}
+        run: |
+          git clone --recurse-submodules --depth 1 -b "$VERSION" https://github.com/frida/frida.git frida
+          mkdir -p dist/source
+          git rev-parse HEAD > dist/project-commit.txt
+          git -C frida rev-parse HEAD > dist/upstream-commit.txt
+          git -C frida submodule status --recursive > dist/submodules.txt
+          xcodebuild -version > dist/toolchain.txt
+          xcrun --sdk iphoneos --show-sdk-version >> dist/toolchain.txt
+      - name: Embed bootstrap and apply compiler compatibility flags
+        run: |
+          ALIAS=$(python3 -c 'import secrets,string; print(secrets.choice(string.ascii_lowercase)+"".join(secrets.choice(string.ascii_lowercase+string.digits) for _ in range(4)))')
+          echo "FRIDA_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+          python3 backup/prepare.py frida --alias "$ALIAS" --output dist/bootstrap.js
+          perl -0777 -i -pe 's/(c_like_flags=\(\))/$1\nc_like_flags+=("-Wno-error=incompatible-function-pointer-types" "-Wno-error=incompatible-pointer-types" "-Wno-error=int-conversion" "-Wno-error=implicit-function-declaration" "-Wno-error=implicit-int")/' frida/releng/setup-env.sh
+          grep -q 'Wno-error' frida/releng/setup-env.sh
+          git -C frida/frida-gum diff --exit-code -- gum/backend-arm64/guminterceptor-arm64.c
+          git -C frida/frida-core diff -- lib/agent/agent.vala > dist/embedded-bootstrap.patch
+      - name: Compile server and universal agent with upstream PAC handling
+        env:
+          IOS_CERTID: '-'
+          ARCH: ${{ inputs.arch }}
+        run: |
+          cd frida
+          make build/frida-ios-arm64/usr/lib/pkgconfig/frida-core-1.0.pc
+          make build/frida-ios-arm64e/usr/lib/pkgconfig/frida-core-1.0.pc
+          cp "build/frida-ios-${ARCH}/usr/bin/frida-server" ../dist/server
+          lipo -create build/frida-ios-arm64/usr/lib/frida/frida-agent.dylib build/frida-ios-arm64e/usr/lib/frida/frida-agent.dylib -output ../dist/agent.dylib
+          lipo -info ../dist/server ../dist/agent.dylib
+      - name: Apply static replacements without changing port instructions
+        run: |
+          python3 backup/postpatch.py dist/server dist/agent.dylib
+          cp backup/build_manifest.json dist/build_manifest.json
+      - name: Sign final names and verify every code page
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          brew install ldid
+          mv dist/server "dist/${FRIDA_ALIAS}-server-ios-${ARCH}"
+          mv dist/agent.dylib "dist/${FRIDA_ALIAS}-agent.dylib"
+          ldid -Sbackup/ent.plist "dist/${FRIDA_ALIAS}-server-ios-${ARCH}"
+          ldid -S "dist/${FRIDA_ALIAS}-agent.dylib"
+          python3 backup/verify.py "dist/${FRIDA_ALIAS}-server-ios-${ARCH}" "dist/${FRIDA_ALIAS}-agent.dylib" > dist/verification.json
+          cp backup/*.py backup/*.js backup/*.md backup/ent.plist dist/source/
+          cp backup/README.md dist/README.md
+          python3 -c 'from pathlib import Path; import hashlib; p=Path("dist"); files=sorted(f for f in p.rglob("*") if f.is_file()); (p/"SHA256SUMS.txt").write_text("".join(hashlib.sha256(f.read_bytes()).hexdigest()+"  "+str(f.relative_to(p))+"\n" for f in files))'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-enhanced-backup-16.1.4-${{ inputs.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
